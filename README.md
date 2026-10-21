@@ -13,32 +13,32 @@ WebhookPilot accepts events from your application via API, fans them out to ever
 ## Architecture
 
 ```
-┌──────────────┐     ┌──────────────────────────────────────────────────────────┐
-│   Your App   │     │                     WebhookPilot                        │
-│              │     │                                                          │
-│  POST /ingest├────►│  REST API ──► PostgreSQL ──► Kafka Producer              │
-│  X-API-Key   │     │                                    │                     │
-└──────────────┘     │                              ┌─────▼──────┐             │
-                     │                              │   Kafka    │             │
-┌──────────────┐     │                              │  Consumer  │             │
-│  Dashboard   │     │                              └─────┬──────┘             │
-│   (React)    ├────►│  JWT Auth                    Fan-out│                    │
-│              │     │  Applications                      │                    │
-│              │     │  Events                     ┌──────▼───────┐            │
-│              │     │  Endpoints                  │   Delivery   │            │
-│              │     │  Analytics                  │    Worker    │            │
-└──────────────┘     │                             └──┬───┬───┬──┘            │
-                     │                                │   │   │               │
-                     │                    ┌───────────┘   │   └──────┐        │
-                     │                    ▼               ▼          ▼        │
+┌──────────────┐     ┌───────────────────────────────────────────────────────┐
+│   Your App   │     │                     WebhookPilot                      │
+│              │     │                                                       │
+│  POST /ingest├────►│  REST API ──► PostgreSQL ──► Kafka Producer           │
+│  X-API-Key   │     │                                    │                  │
+└──────────────┘     │                              ┌─────▼──────┐           │
+                     │                              │   Kafka    │           │
+┌──────────────┐     │                              │  Consumer  │           │
+│  Dashboard   │     │                              └────-─┬─────┘           │
+│   (React)    ├────►│  JWT Auth                    Fan-out│                 │
+│              │     │  Applications                       │                 │
+│              │     │  Events                     ┌────-──▼──────┐          │
+│              │     │  Endpoints                  │   Delivery   │          │
+│              │     │  Analytics                  │    Worker    │          │
+└──────────────┘     │                             └──┬───┬───┬── ┘          │
+                     │                                │   │   │              │
+                     │                    ┌───────────┘   │   └──────┐       │
+                     │                    ▼               ▼          ▼       │
                      │               ┌────────┐    ┌──────────┐  ┌─────┐     │
-                     │               │  HTTP   │    │  Retry   │  │ DLQ │     │
-                     │               │  POST   │    │ Scheduler│  │     │     │
-                     │               │ + HMAC  │    │(database)│  │     │     │
+                     │               │  HTTP  │    │  Retry   │  │ DLQ │     │
+                     │               │  POST  │    │ Scheduler│  │     │     │
+                     │               │ + HMAC │    │(database)│  │     │     │
                      │               └────────┘    └──────────┘  └─────┘     │
-                     │                                                          │
-                     │  Redis: Circuit Breaker State + Rate Limiting            │
-                     └──────────────────────────────────────────────────────────┘
+                     │                                                       │
+                     │  Redis: Circuit Breaker State + Rate Limiting         │
+                     └───────────────────────────────────────────────────────┘
 ```
 
 ## Tech Stack
