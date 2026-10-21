@@ -31,7 +31,7 @@ public class ApplicationService {
                 .name(request.getName())
                 .apiKey(generateApiKey())
                 .build();
-        app = applicationRepository.save(app);
+        app = applicationRepository.saveAndFlush(app);
 
         return toResponse(app);
     }
@@ -55,18 +55,11 @@ public class ApplicationService {
         applicationRepository.delete(app);
     }
 
-    /**
-     * Internal helper — used by other services to verify ownership.
-     */
     public Application findByIdAndUser(UUID appId, UUID userId) {
         return applicationRepository.findByIdAndUserId(appId, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Application not found"));
     }
 
-    /**
-     * Generates a random API key prefixed with "whp_" for easy identification.
-     * Pattern: whp_ + 32 hex chars = 36 total characters.
-     */
     private String generateApiKey() {
         return "whp_" + UUID.randomUUID().toString().replace("-", "");
     }

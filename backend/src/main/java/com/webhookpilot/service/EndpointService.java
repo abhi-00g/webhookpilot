@@ -40,7 +40,7 @@ public class EndpointService {
                 .secret(generateSigningSecret())
                 .description(request.getDescription())
                 .build();
-        endpoint = endpointRepository.save(endpoint);
+        endpoint = endpointRepository.saveAndFlush(endpoint);
 
         return toResponse(endpoint);
     }
@@ -68,7 +68,7 @@ public class EndpointService {
             endpoint.setStatus(request.getStatus());
         }
 
-        endpoint = endpointRepository.save(endpoint);
+        endpoint = endpointRepository.saveAndFlush(endpoint);
         return toResponse(endpoint);
     }
 
@@ -79,10 +79,6 @@ public class EndpointService {
         endpointRepository.delete(endpoint);
     }
 
-    /**
-     * Replaces the full subscription list for this endpoint.
-     * All event type IDs must belong to the same application.
-     */
     @Transactional
     public EndpointResponse updateSubscriptions(UUID endpointId, UUID appId, UUID userId,
                                                  UpdateSubscriptionsRequest request) {
@@ -98,7 +94,7 @@ public class EndpointService {
         }
 
         endpoint.setSubscribedEventTypes(eventTypes);
-        endpoint = endpointRepository.save(endpoint);
+        endpoint = endpointRepository.saveAndFlush(endpoint);
         return toResponse(endpoint);
     }
 
@@ -117,11 +113,6 @@ public class EndpointService {
                 .orElseThrow(() -> new ResourceNotFoundException("Endpoint not found"));
     }
 
-    /**
-     * Generates a cryptographically random 32-byte hex string prefixed with "whsec_".
-     * This is the secret the subscriber uses to verify HMAC-SHA256 webhook signatures.
-     * Pattern matches Stripe's webhook secret format.
-     */
     private String generateSigningSecret() {
         byte[] bytes = new byte[32];
         SECURE_RANDOM.nextBytes(bytes);

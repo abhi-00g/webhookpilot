@@ -13,15 +13,33 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: update          # auto-creates/updates tables from entities (dev only; Phase 5 uses Flyway)
-    show-sql: true              # logs every SQL query during development
-    open-in-view: false         # disables lazy-loading outside transactions (prevents N+1 in controllers)
+      ddl-auto: update
+    show-sql: true
+    open-in-view: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
         format_sql: true
 
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+    consumer:
+      group-id: webhookpilot-delivery
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+
 app:
   jwt:
     secret: "webhook-pilot-dev-secret-key-change-in-production-must-be-at-least-256-bits"
-    expiration-ms: 86400000     # 24 hours
+    expiration-ms: 86400000
+
+  delivery:
+    max-attempts: 6
+    backoff-seconds: 10,30,60,300,900
+    connect-timeout-seconds: 10
+    read-timeout-seconds: 30
+    retry-poll-interval-ms: 10000
