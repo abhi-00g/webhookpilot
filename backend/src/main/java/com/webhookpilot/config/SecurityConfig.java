@@ -44,6 +44,7 @@ public class SecurityConfig {
                 // Public: auth endpoints and event ingestion (uses API key, not JWT)
                 .requestMatchers("/api/auth/**").permitAll()
                 .requestMatchers("/api/events/ingest").permitAll()
+                .requestMatchers("/api/test/receive/**").permitAll()
                 // Everything else requires a valid JWT
                 .anyRequest().authenticated()
             )
@@ -67,7 +68,7 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration config = new CorsConfiguration();
-        config.setAllowedOrigins(List.of("http://localhost:5173")); // Vite dev server
+        config.setAllowedOrigins(List.of("http://localhost:5173", "https://webhookpilot.vercel.app")); // Vite dev server
         config.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         config.setAllowedHeaders(List.of("*"));
         config.setAllowCredentials(true);
