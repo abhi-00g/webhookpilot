@@ -28,14 +28,11 @@ services:
     ports:
       - "9092:9092"
 
-  # Redis — needed from Phase 3 (circuit breaker state, rate limiting)
   redis:
     image: redis:7-alpine
     container_name: webhookpilot-redis
     ports:
       - "6379:6379"
-    profiles:
-      - full
 
 volumes:
   pgdata:

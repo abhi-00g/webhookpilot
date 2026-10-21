@@ -3,6 +3,7 @@ package com.webhookpilot.service;
 import com.webhookpilot.dto.request.IngestEventRequest;
 import com.webhookpilot.dto.response.DeliveryAttemptResponse;
 import com.webhookpilot.dto.response.EventResponse;
+import com.webhookpilot.exception.RateLimitExceededException;
 import com.webhookpilot.exception.ResourceNotFoundException;
 import com.webhookpilot.model.Application;
 import com.webhookpilot.model.DeliveryAttempt;
@@ -13,6 +14,7 @@ import com.webhookpilot.repository.EventRepository;
 import com.webhookpilot.repository.EventTypeRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -30,21 +32,25 @@ public class EventService {
     private final EventTypeRepository eventTypeRepository;
     private final ApplicationRepository applicationRepository;
     private final DeliveryProducer deliveryProducer;
+    private final RateLimiterService rateLimiterService;
 
-    /**
-     * Ingests an event using API key authentication.
-     * Saves to DB, then publishes to Kafka for asynchronous fan-out delivery.
-     */
     @Transactional
     public EventResponse ingest(String apiKey, IngestEventRequest request) {
         Application app = applicationRepository.findByApiKey(apiKey)
                 .orElseThrow(() -> new IllegalArgumentException("Invalid API key"));
+
+        // Rate limit check
+        if (!rateLimiterService.allowEvent(app.getId())) {
+            throw new RateLimitExceededException(
+                    "Rate limit exceeded. Maximum 100 events per minute per application.");
+        }
 
         // Idempotency check
         if (request.getIdempotencyKey() != null) {
             Optional<Event> existing = eventRepository
                     .findByApplicationIdAndIdempotencyKey(app.getId(), request.getIdempotencyKey());
             if (existing.isPresent()) {
+                log.info("Idempotent event detected, returning existing event");
                 return toResponse(existing.get());
             }
         }
@@ -62,9 +68,15 @@ public class EventService {
                 .build();
         event = eventRepository.saveAndFlush(event);
 
-        // Publish to Kafka — delivery happens asynchronously via DeliveryConsumer
-        deliveryProducer.publishEvent(event.getId());
-        log.info("Event {} ingested and published to Kafka", event.getId());
+        // Structured logging with MDC
+        MDC.put("eventId", event.getId().toString());
+        MDC.put("applicationId", app.getId().toString());
+        try {
+            deliveryProducer.publishEvent(event.getId());
+            log.info("Event ingested and published to Kafka");
+        } finally {
+            MDC.clear();
+        }
 
         return toResponse(event);
     }

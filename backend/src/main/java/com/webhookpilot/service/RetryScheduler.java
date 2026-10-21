@@ -38,7 +38,7 @@ public class RetryScheduler {
     @Scheduled(fixedDelayString = "${app.delivery.retry-poll-interval-ms:10000}")
     public void pollForRetries() {
         List<DeliveryAttempt> dueRetries = deliveryAttemptRepository
-                .findByStatusAndNextRetryAtBefore(DeliveryStatus.PENDING, Instant.now());
+                .findRetryableDue(DeliveryStatus.PENDING, Instant.now());
 
         if (!dueRetries.isEmpty()) {
             log.info("Found {} delivery attempts due for retry", dueRetries.size());

@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <!--
+        Structured JSON logging via logstash-logback-encoder.
+        Every log line is a JSON object with timestamp, level, logger, message,
+        plus any MDC fields (eventId, endpointId, attemptNumber, etc.).
+
+        Why JSON logs?
+        - Parseable by CloudWatch, Datadog, ELK, Splunk without custom regex
+        - MDC fields become searchable/filterable dimensions
+        - In production: "show me all logs for event abc-123" is one query
+
+        In local dev, you can switch to the "dev" profile for human-readable output.
+    -->
+
+    <springProfile name="!dev">
+        <appender name="JSON_CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+                <includeMdcKeyName>eventId</includeMdcKeyName>
+                <includeMdcKeyName>endpointId</includeMdcKeyName>
+                <includeMdcKeyName>attemptNumber</includeMdcKeyName>
+                <includeMdcKeyName>applicationId</includeMdcKeyName>
+                <includeMdcKeyName>deliveryStatus</includeMdcKeyName>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="JSON_CONSOLE"/>
+        </root>
+
+        <!-- Reduce noise from Spring/Kafka/Hibernate internals -->
+        <logger name="org.apache.kafka" level="WARN"/>
+        <logger name="org.hibernate" level="WARN"/>
+        <logger name="org.springframework.kafka" level="WARN"/>
+        <logger name="org.springframework.security" level="WARN"/>
+    </springProfile>
+
+    <!-- Human-readable logs for local dev: run with -Dspring.profiles.active=dev -->
+    <springProfile name="dev">
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder>
+                <pattern>%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+            </encoder>
+        </appender>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+    </springProfile>
+
+</configuration>

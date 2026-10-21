@@ -12,10 +12,6 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 
-/**
- * Catches exceptions thrown anywhere in controllers/services and returns
- * consistent JSON error responses instead of Spring's default HTML error page.
- */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -39,10 +35,11 @@ public class GlobalExceptionHandler {
         return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage());
     }
 
-    /**
-     * Handles @Valid failures on DTOs.
-     * Returns a map of field → error message instead of a generic 400.
-     */
+    @ExceptionHandler(RateLimitExceededException.class)
+    public ResponseEntity<Map<String, Object>> handleRateLimit(RateLimitExceededException ex) {
+        return buildResponse(HttpStatus.TOO_MANY_REQUESTS, ex.getMessage());
+    }
+
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<Map<String, Object>> handleValidation(MethodArgumentNotValidException ex) {
         Map<String, String> fieldErrors = new HashMap<>();
