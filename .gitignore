@@ -1,0 +1,22 @@
+# Build output
+backend/target/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+
+# Maven wrapper (will be generated locally)
+!backend/.mvn/wrapper/maven-wrapper.jar
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+*.env.local
+
+# Logs
+*.log

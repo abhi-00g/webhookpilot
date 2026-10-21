@@ -1,0 +1,27 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: webhookpilot
+
+  datasource:
+    url: jdbc:postgresql://localhost:5433/webhookpilot
+    username: webhookpilot
+    password: webhookpilot
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update          # auto-creates/updates tables from entities (dev only; Phase 5 uses Flyway)
+    show-sql: true              # logs every SQL query during development
+    open-in-view: false         # disables lazy-loading outside transactions (prevents N+1 in controllers)
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+
+app:
+  jwt:
+    secret: "webhook-pilot-dev-secret-key-change-in-production-must-be-at-least-256-bits"
+    expiration-ms: 86400000     # 24 hours
