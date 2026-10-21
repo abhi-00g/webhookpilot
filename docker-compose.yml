@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   postgres:
     image: postgres:16-alpine
@@ -13,16 +11,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
 
-  # Redis — needed from Phase 3 (circuit breaker state, rate limiting)
-  redis:
-    image: redis:7-alpine
-    container_name: webhookpilot-redis
-    ports:
-      - "6379:6379"
-    profiles:
-      - full
-
-  # Kafka (KRaft mode, no Zookeeper) — needed from Phase 2
   kafka:
     image: apache/kafka:3.7.0
     container_name: webhookpilot-kafka
@@ -39,6 +27,13 @@ services:
       CLUSTER_ID: "webhookpilot-local-dev-001"
     ports:
       - "9092:9092"
+
+  # Redis — needed from Phase 3 (circuit breaker state, rate limiting)
+  redis:
+    image: redis:7-alpine
+    container_name: webhookpilot-redis
+    ports:
+      - "6379:6379"
     profiles:
       - full
 

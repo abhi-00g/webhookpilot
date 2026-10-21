@@ -12,6 +12,7 @@ import com.webhookpilot.repository.ApplicationRepository;
 import com.webhookpilot.repository.EventRepository;
 import com.webhookpilot.repository.EventTypeRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -22,16 +23,17 @@ import java.util.*;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class EventService {
 
     private final EventRepository eventRepository;
     private final EventTypeRepository eventTypeRepository;
     private final ApplicationRepository applicationRepository;
+    private final DeliveryProducer deliveryProducer;
 
     /**
-     * Ingests an event using API key authentication (not JWT).
-     * If an idempotency key is provided and already exists, returns the existing event.
-     * In Phase 1 this just saves to DB. In Phase 2 it also publishes to Kafka.
+     * Ingests an event using API key authentication.
+     * Saves to DB, then publishes to Kafka for asynchronous fan-out delivery.
      */
     @Transactional
     public EventResponse ingest(String apiKey, IngestEventRequest request) {
@@ -58,16 +60,17 @@ public class EventService {
                 .payload(request.getPayload())
                 .idempotencyKey(request.getIdempotencyKey())
                 .build();
-        event = eventRepository.save(event);
+        event = eventRepository.saveAndFlush(event);
 
-        // Phase 2: publish to Kafka here
+        // Publish to Kafka — delivery happens asynchronously via DeliveryConsumer
+        deliveryProducer.publishEvent(event.getId());
+        log.info("Event {} ingested and published to Kafka", event.getId());
 
         return toResponse(event);
     }
 
     @Transactional(readOnly = true)
     public Page<EventResponse> listByApplication(UUID appId, UUID userId, int page, int size) {
-        // Ownership check via the page query (appId must belong to user — enforced at controller level)
         return eventRepository.findByApplicationId(appId, PageRequest.of(page, size, Sort.by("createdAt").descending()))
                 .map(this::toResponse);
     }

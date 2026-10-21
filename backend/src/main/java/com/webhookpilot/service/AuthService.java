@@ -31,7 +31,7 @@ public class AuthService {
                 .email(request.getEmail())
                 .passwordHash(passwordEncoder.encode(request.getPassword()))
                 .build();
-        user = userRepository.save(user);
+        user = userRepository.saveAndFlush(user);
 
         String token = tokenProvider.generateToken(user.getId());
         return new AuthResponse(token, user.getEmail());

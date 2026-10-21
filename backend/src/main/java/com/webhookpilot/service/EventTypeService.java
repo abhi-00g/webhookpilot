@@ -35,16 +35,14 @@ public class EventTypeService {
                 .name(request.getName())
                 .description(request.getDescription())
                 .build();
-        eventType = eventTypeRepository.save(eventType);
+        eventType = eventTypeRepository.saveAndFlush(eventType);
 
         return toResponse(eventType);
     }
 
     @Transactional(readOnly = true)
     public List<EventTypeResponse> listByApplication(UUID appId, UUID userId) {
-        // Ownership check
         applicationService.findByIdAndUser(appId, userId);
-
         return eventTypeRepository.findByApplicationId(appId).stream()
                 .map(this::toResponse)
                 .toList();
@@ -53,7 +51,6 @@ public class EventTypeService {
     @Transactional
     public void delete(UUID eventTypeId, UUID appId, UUID userId) {
         applicationService.findByIdAndUser(appId, userId);
-
         EventType eventType = eventTypeRepository.findByIdAndApplicationId(eventTypeId, appId)
                 .orElseThrow(() -> new ResourceNotFoundException("Event type not found"));
         eventTypeRepository.delete(eventType);
