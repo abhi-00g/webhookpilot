@@ -16,6 +16,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
+import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -82,5 +83,32 @@ public class DeliveryConsumer {
     @KafkaListener(topics = KafkaTopicConfig.DLQ_TOPIC, groupId = "webhookpilot-dlq")
     public void handleDeadLetter(String message) {
         log.warn("Dead letter received: {}", message);
+    }
+
+    /**
+     * Synchronous delivery fallback when Kafka is unavailable (e.g., production without Kafka).
+     * Same fan-out logic as the Kafka consumer, just called directly.
+     */
+    public void deliverSynchronously(UUID eventId) {
+        if (deliveryAttemptRepository.existsByEventId(eventId)) return;
+
+        Event event = eventRepository.findById(eventId).orElse(null);
+        if (event == null) return;
+
+        List<Endpoint> endpoints = endpointRepository
+                .findBySubscribedEventTypeIdAndStatus(
+                        event.getEventType().getId(), EndpointStatus.ACTIVE);
+
+        log.info("Synchronous delivery: fanning out event {} to {} endpoints",
+                eventId, endpoints.size());
+
+        for (Endpoint endpoint : endpoints) {
+            try {
+                deliveryService.deliver(event, endpoint, 1);
+            } catch (Exception e) {
+                log.error("Sync delivery failed for endpoint {}: {}",
+                        endpoint.getId(), e.getMessage());
+            }
+        }
     }
 }

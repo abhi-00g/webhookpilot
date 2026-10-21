@@ -32,6 +32,7 @@ public class EventService {
     private final EventTypeRepository eventTypeRepository;
     private final ApplicationRepository applicationRepository;
     private final DeliveryProducer deliveryProducer;
+    private final DeliveryConsumer deliveryConsumer;
     private final RateLimiterService rateLimiterService;
 
     @Transactional
@@ -72,8 +73,13 @@ public class EventService {
         MDC.put("eventId", event.getId().toString());
         MDC.put("applicationId", app.getId().toString());
         try {
-            deliveryProducer.publishEvent(event.getId());
-            log.info("Event ingested and published to Kafka");
+            try {
+                deliveryProducer.publishEvent(event.getId());
+                log.info("Event ingested and published to Kafka");
+            } catch (Exception e) {
+                log.warn("Kafka unavailable, delivering synchronously");
+                deliveryConsumer.deliverSynchronously(event.getId());
+            }
         } finally {
             MDC.clear();
         }
