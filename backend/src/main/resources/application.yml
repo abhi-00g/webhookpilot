@@ -14,12 +14,12 @@ spring:
   jpa:
     hibernate:
       ddl-auto: update
-    show-sql: true
+    show-sql: false              # turned off — structured logging replaces SQL debug output
     open-in-view: false
     properties:
       hibernate:
         dialect: org.hibernate.dialect.PostgreSQLDialect
-        format_sql: true
+        format_sql: false
 
   kafka:
     bootstrap-servers: localhost:9092
@@ -32,6 +32,11 @@ spring:
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
       value-deserializer: org.apache.kafka.common.serialization.StringDeserializer
 
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
 app:
   jwt:
     secret: "webhook-pilot-dev-secret-key-change-in-production-must-be-at-least-256-bits"
@@ -43,3 +48,10 @@ app:
     connect-timeout-seconds: 10
     read-timeout-seconds: 30
     retry-poll-interval-ms: 10000
+
+  circuit-breaker:
+    failure-threshold: 5          # consecutive failures before circuit opens
+    cooldown-seconds: 60          # how long circuit stays open before half-open probe
+
+  rate-limit:
+    max-events-per-minute: 100    # per application

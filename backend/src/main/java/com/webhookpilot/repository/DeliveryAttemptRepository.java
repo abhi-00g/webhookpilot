@@ -3,6 +3,8 @@ package com.webhookpilot.repository;
 import com.webhookpilot.model.DeliveryAttempt;
 import com.webhookpilot.model.enums.DeliveryStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
+import org.springframework.data.jpa.repository.Query;
+import org.springframework.data.repository.query.Param;
 
 import java.time.Instant;
 import java.util.List;
@@ -15,13 +17,18 @@ public interface DeliveryAttemptRepository extends JpaRepository<DeliveryAttempt
     List<DeliveryAttempt> findByEndpointIdOrderByCreatedAtDesc(UUID endpointId);
 
     /**
-     * RetryScheduler query: find PENDING delivery attempts that are due for retry.
-     * PENDING + nextRetryAt means "scheduled for retry at this time".
+     * RetryScheduler query with JOIN FETCH to eagerly load Event, Endpoint,
+     * and EventType — prevents lazy loading errors outside the Hibernate session.
      */
-    List<DeliveryAttempt> findByStatusAndNextRetryAtBefore(DeliveryStatus status, Instant now);
+    @Query("SELECT da FROM DeliveryAttempt da " +
+           "JOIN FETCH da.event e " +
+           "JOIN FETCH e.eventType " +
+           "JOIN FETCH e.application " +
+           "JOIN FETCH da.endpoint " +
+           "WHERE da.status = :status AND da.nextRetryAt < :now")
+    List<DeliveryAttempt> findRetryableDue(
+            @Param("status") DeliveryStatus status,
+            @Param("now") Instant now);
 
-    /**
-     * Idempotency check: prevent duplicate fan-out if Kafka delivers the same message twice.
-     */
     boolean existsByEventId(UUID eventId);
 }

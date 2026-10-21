@@ -9,6 +9,7 @@ import com.webhookpilot.model.Event;
 import com.webhookpilot.model.enums.DeliveryStatus;
 import com.webhookpilot.repository.DeliveryAttemptRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.slf4j.MDC;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -19,16 +20,6 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
 
-/**
- * Core delivery engine: signs the payload, POSTs it to the endpoint, records the result.
- *
- * Each delivery attempt:
- * 1. Serializes the event payload to JSON
- * 2. Computes HMAC-SHA256 signature using the endpoint's secret
- * 3. POSTs to the endpoint URL with webhook headers
- * 4. Records the HTTP status, response body (first 1KB), and any error
- * 5. On failure: schedules a retry with exponential backoff, or marks as EXHAUSTED
- */
 @Service
 @Slf4j
 public class WebhookDeliveryService {
@@ -37,6 +28,7 @@ public class WebhookDeliveryService {
     private final HmacSignatureService hmacService;
     private final DeliveryProducer deliveryProducer;
     private final DeliveryProperties deliveryProperties;
+    private final CircuitBreakerService circuitBreaker;
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
 
@@ -44,98 +36,143 @@ public class WebhookDeliveryService {
                                    HmacSignatureService hmacService,
                                    DeliveryProducer deliveryProducer,
                                    DeliveryProperties deliveryProperties,
+                                   CircuitBreakerService circuitBreaker,
                                    ObjectMapper objectMapper) {
         this.deliveryAttemptRepository = deliveryAttemptRepository;
         this.hmacService = hmacService;
         this.deliveryProducer = deliveryProducer;
         this.deliveryProperties = deliveryProperties;
+        this.circuitBreaker = circuitBreaker;
         this.objectMapper = objectMapper;
 
-        // Single reusable HttpClient with connect timeout
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(deliveryProperties.getConnectTimeoutSeconds()))
                 .build();
     }
 
-    /**
-     * Attempts delivery of an event to an endpoint.
-     * Creates a DeliveryAttempt record and updates it based on the HTTP result.
-     */
     @Transactional
     public void deliver(Event event, Endpoint endpoint, int attemptNumber) {
-        log.info("Delivering event {} to endpoint {} (attempt {})",
-                event.getId(), endpoint.getId(), attemptNumber);
-
-        // Create the attempt record
-        DeliveryAttempt attempt = DeliveryAttempt.builder()
-                .event(event)
-                .endpoint(endpoint)
-                .attemptNumber(attemptNumber)
-                .status(DeliveryStatus.PENDING)
-                .build();
-        attempt = deliveryAttemptRepository.saveAndFlush(attempt);
+        // Set MDC for structured logging — every log in this method gets these fields
+        MDC.put("eventId", event.getId().toString());
+        MDC.put("endpointId", endpoint.getId().toString());
+        MDC.put("attemptNumber", String.valueOf(attemptNumber));
+        MDC.put("applicationId", event.getApplication().getId().toString());
 
         try {
-            // Serialize payload
-            String payloadJson = objectMapper.writeValueAsString(event.getPayload());
-            String timestamp = String.valueOf(Instant.now().getEpochSecond());
+            // Circuit breaker check
+            if (!circuitBreaker.allowDelivery(endpoint.getId())) {
+                log.info("Circuit OPEN: skipping delivery, scheduling retry");
+                MDC.put("deliveryStatus", "CIRCUIT_OPEN");
 
-            // Sign: HMAC-SHA256(timestamp + "." + payload, secret)
-            String signatureContent = timestamp + "." + payloadJson;
-            String signature = hmacService.sign(signatureContent, endpoint.getSecret());
-
-            // Build HTTP request with webhook headers
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(endpoint.getUrl()))
-                    .header("Content-Type", "application/json")
-                    .header("User-Agent", "WebhookPilot/1.0")
-                    .header("X-Webhook-Id", event.getId().toString())
-                    .header("X-Webhook-Timestamp", timestamp)
-                    .header("X-Webhook-Signature", "sha256=" + signature)
-                    .timeout(Duration.ofSeconds(deliveryProperties.getReadTimeoutSeconds()))
-                    .POST(HttpRequest.BodyPublishers.ofString(payloadJson))
-                    .build();
-
-            // Send
-            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
-
-            attempt.setHttpStatusCode(response.statusCode());
-            attempt.setResponseBody(truncate(response.body(), 1024));
-
-            if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                attempt.setStatus(DeliveryStatus.SUCCESS);
-                log.info("Delivery SUCCESS: event={}, endpoint={}, status={}",
-                        event.getId(), endpoint.getId(), response.statusCode());
-            } else {
-                handleFailure(attempt, event, endpoint, attemptNumber,
-                        "HTTP " + response.statusCode());
+                // Schedule a retry — the circuit will eventually close
+                Instant nextRetry = deliveryProperties.calculateNextRetryAt(attemptNumber);
+                if (nextRetry != null) {
+                    DeliveryAttempt retryAttempt = DeliveryAttempt.builder()
+                            .event(event)
+                            .endpoint(endpoint)
+                            .attemptNumber(attemptNumber + 1)
+                            .status(DeliveryStatus.PENDING)
+                            .nextRetryAt(nextRetry)
+                            .errorMessage("Circuit breaker open")
+                            .build();
+                    deliveryAttemptRepository.saveAndFlush(retryAttempt);
+                }
+                return;
             }
 
-        } catch (JsonProcessingException e) {
-            attempt.setErrorMessage("Failed to serialize payload: " + e.getMessage());
-            attempt.setStatus(DeliveryStatus.EXHAUSTED);
-            log.error("Payload serialization failed for event {}", event.getId(), e);
+            log.info("Delivering webhook");
 
-        } catch (Exception e) {
-            handleFailure(attempt, event, endpoint, attemptNumber, e.getMessage());
+            DeliveryAttempt attempt = DeliveryAttempt.builder()
+                    .event(event)
+                    .endpoint(endpoint)
+                    .attemptNumber(attemptNumber)
+                    .status(DeliveryStatus.PENDING)
+                    .build();
+            attempt = deliveryAttemptRepository.saveAndFlush(attempt);
+
+            try {
+                String payloadJson = objectMapper.writeValueAsString(event.getPayload());
+                String timestamp = String.valueOf(Instant.now().getEpochSecond());
+                String signatureContent = timestamp + "." + payloadJson;
+                String signature = hmacService.sign(signatureContent, endpoint.getSecret());
+
+                HttpRequest request = HttpRequest.newBuilder()
+                        .uri(URI.create(endpoint.getUrl()))
+                        .header("Content-Type", "application/json")
+                        .header("User-Agent", "WebhookPilot/1.0")
+                        .header("X-Webhook-Id", event.getId().toString())
+                        .header("X-Webhook-Timestamp", timestamp)
+                        .header("X-Webhook-Signature", "sha256=" + signature)
+                        .timeout(Duration.ofSeconds(deliveryProperties.getReadTimeoutSeconds()))
+                        .POST(HttpRequest.BodyPublishers.ofString(payloadJson))
+                        .build();
+
+                HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+
+                attempt.setHttpStatusCode(response.statusCode());
+                attempt.setResponseBody(truncate(response.body(), 1024));
+
+                if (response.statusCode() >= 200 && response.statusCode() < 300) {
+                    attempt.setStatus(DeliveryStatus.SUCCESS);
+                    MDC.put("deliveryStatus", "SUCCESS");
+                    circuitBreaker.recordSuccess(endpoint);
+                    log.info("Delivery succeeded with status {}", response.statusCode());
+                } else {
+                    MDC.put("deliveryStatus", "FAILED");
+                    circuitBreaker.recordFailure(endpoint);
+                    handleFailure(attempt, event, endpoint, attemptNumber,
+                            "HTTP " + response.statusCode());
+                }
+
+            } catch (JsonProcessingException e) {
+                attempt.setErrorMessage("Failed to serialize payload: " + e.getMessage());
+                attempt.setStatus(DeliveryStatus.EXHAUSTED);
+                MDC.put("deliveryStatus", "SERIALIZE_ERROR");
+                log.error("Payload serialization failed", e);
+
+            } catch (Exception e) {
+                MDC.put("deliveryStatus", "FAILED");
+                circuitBreaker.recordFailure(endpoint);
+                handleFailure(attempt, event, endpoint, attemptNumber, e.getMessage());
+            }
+
+            deliveryAttemptRepository.saveAndFlush(attempt);
+
+        } finally {
+            MDC.clear();
         }
-
-        deliveryAttemptRepository.saveAndFlush(attempt);
     }
 
-    /**
-     * Retries delivery for an existing PENDING DeliveryAttempt (called by RetryScheduler).
-     */
     @Transactional
     public void retryDelivery(DeliveryAttempt pendingAttempt) {
         Event event = pendingAttempt.getEvent();
         Endpoint endpoint = pendingAttempt.getEndpoint();
         int attemptNumber = pendingAttempt.getAttemptNumber();
 
-        log.info("Retrying delivery: event={}, endpoint={}, attempt={}",
-                event.getId(), endpoint.getId(), attemptNumber);
+        MDC.put("eventId", event.getId().toString());
+        MDC.put("endpointId", endpoint.getId().toString());
+        MDC.put("attemptNumber", String.valueOf(attemptNumber));
 
         try {
+            // Circuit breaker check on retry too
+            if (!circuitBreaker.allowDelivery(endpoint.getId())) {
+                log.info("Circuit OPEN on retry: rescheduling");
+                Instant nextRetry = deliveryProperties.calculateNextRetryAt(attemptNumber);
+                if (nextRetry != null) {
+                    pendingAttempt.setNextRetryAt(nextRetry);
+                    pendingAttempt.setErrorMessage("Circuit breaker open");
+                } else {
+                    pendingAttempt.setStatus(DeliveryStatus.EXHAUSTED);
+                    pendingAttempt.setNextRetryAt(null);
+                    deliveryProducer.publishToDlq(event.getId(), endpoint.getId(),
+                            attemptNumber, "Circuit breaker open — exhausted");
+                }
+                deliveryAttemptRepository.saveAndFlush(pendingAttempt);
+                return;
+            }
+
+            log.info("Retrying delivery");
+
             String payloadJson = objectMapper.writeValueAsString(event.getPayload());
             String timestamp = String.valueOf(Instant.now().getEpochSecond());
             String signatureContent = timestamp + "." + payloadJson;
@@ -160,35 +197,36 @@ public class WebhookDeliveryService {
 
             if (response.statusCode() >= 200 && response.statusCode() < 300) {
                 pendingAttempt.setStatus(DeliveryStatus.SUCCESS);
-                log.info("Retry SUCCESS: event={}, endpoint={}, attempt={}",
-                        event.getId(), endpoint.getId(), attemptNumber);
+                MDC.put("deliveryStatus", "SUCCESS");
+                circuitBreaker.recordSuccess(endpoint);
+                log.info("Retry succeeded with status {}", response.statusCode());
             } else {
+                MDC.put("deliveryStatus", "FAILED");
+                circuitBreaker.recordFailure(endpoint);
                 scheduleNextRetryOrExhaust(pendingAttempt, event, endpoint, attemptNumber,
                         "HTTP " + response.statusCode());
             }
 
         } catch (Exception e) {
             pendingAttempt.setNextRetryAt(null);
+            circuitBreaker.recordFailure(endpoint);
             scheduleNextRetryOrExhaust(pendingAttempt, event, endpoint, attemptNumber,
                     e.getMessage());
+        } finally {
+            MDC.clear();
         }
 
         deliveryAttemptRepository.saveAndFlush(pendingAttempt);
     }
 
-    /**
-     * Handles a failed initial delivery: schedules retry or marks exhausted.
-     */
     private void handleFailure(DeliveryAttempt attempt, Event event, Endpoint endpoint,
                                 int attemptNumber, String errorMessage) {
         attempt.setErrorMessage(errorMessage);
 
         Instant nextRetry = deliveryProperties.calculateNextRetryAt(attemptNumber);
         if (nextRetry != null) {
-            // Schedule retry: create a new PENDING attempt with next_retry_at
             attempt.setStatus(DeliveryStatus.FAILED);
-            log.warn("Delivery FAILED: event={}, endpoint={}, attempt={}, error={}. Scheduling retry.",
-                    event.getId(), endpoint.getId(), attemptNumber, errorMessage);
+            log.warn("Delivery failed: {}. Retry scheduled.", errorMessage);
 
             DeliveryAttempt retryAttempt = DeliveryAttempt.builder()
                     .event(event)
@@ -202,14 +240,10 @@ public class WebhookDeliveryService {
             attempt.setStatus(DeliveryStatus.EXHAUSTED);
             deliveryProducer.publishToDlq(event.getId(), endpoint.getId(),
                     attemptNumber, errorMessage);
-            log.error("Delivery EXHAUSTED: event={}, endpoint={}, attempts={}",
-                    event.getId(), endpoint.getId(), attemptNumber);
+            log.error("Delivery exhausted after {} attempts", attemptNumber);
         }
     }
 
-    /**
-     * Handles a failed retry: schedules next retry or marks exhausted.
-     */
     private void scheduleNextRetryOrExhaust(DeliveryAttempt attempt, Event event,
                                              Endpoint endpoint, int attemptNumber,
                                              String errorMessage) {
@@ -217,17 +251,14 @@ public class WebhookDeliveryService {
 
         Instant nextRetry = deliveryProperties.calculateNextRetryAt(attemptNumber);
         if (nextRetry != null) {
-            // Keep this attempt as PENDING with a new next_retry_at
             attempt.setStatus(DeliveryStatus.PENDING);
             attempt.setNextRetryAt(nextRetry);
-            log.warn("Retry FAILED: event={}, endpoint={}, attempt={}. Next retry at {}",
-                    event.getId(), endpoint.getId(), attemptNumber, nextRetry);
+            log.warn("Retry failed: {}. Next retry scheduled.", errorMessage);
         } else {
             attempt.setStatus(DeliveryStatus.EXHAUSTED);
             deliveryProducer.publishToDlq(event.getId(), endpoint.getId(),
                     attemptNumber, errorMessage);
-            log.error("Retry EXHAUSTED: event={}, endpoint={}, attempts={}",
-                    event.getId(), endpoint.getId(), attemptNumber);
+            log.error("Retry exhausted after {} attempts", attemptNumber);
         }
     }
 
